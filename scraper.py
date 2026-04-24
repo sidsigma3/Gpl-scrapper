@@ -12,16 +12,19 @@ class CricHeroesScraper:
             "Accept-Language": "en-US,en;q=0.9",
         })
 
-    def _get_build_id(self, tournament_id, slug):
-        """Fetch the main tournament page and extract the Next.js buildId."""
-        url = f"{self.base_url}/tournament/{tournament_id}/{slug}/matches/past-matches"
-        try:
-            response = self.session.get(url, timeout=10)
-            match = re.search(r'"buildId":"([^"]+)"', response.text)
-            return match.group(1) if match else None
-        except Exception as e:
-            print(f"Error fetching Build ID: {e}")
-            return None
+    def _get_build_id(self, url):
+        """Fetch the page at the given URL and extract the Next.js buildId."""
+        for attempt in range(3):
+            try:
+                response = self.session.get(url, timeout=10)
+                if response.status_code == 200:
+                    match = re.search(r'"buildId":"([^"]+)"', response.text)
+                    if match:
+                        return match.group(1)
+                time.sleep(1)
+            except Exception as e:
+                print(f"Attempt {attempt + 1} failed: {e}")
+        return None
 
     def _fetch_tab(self, build_id, tournament_id, slug, tab_path, params, is_direct_path=False):
         """Fetch JSON data from the internal Next.js endpoint."""
@@ -47,11 +50,12 @@ class CricHeroesScraper:
         return text.replace(' ', '-')
 
     def scrape_match_details(self, match_id, tournament_slug, team_a, team_b):
-        build_id = self._get_build_id(tournament_id="1499216", slug=tournament_slug)
-        if not build_id:
-            return {"success": False, "error": "Could not get build ID"}
-
         team_slug = f"{self.slugify(team_a)}-vs-{self.slugify(team_b)}"
+        match_url = f"{self.base_url}/scorecard/{match_id}/{tournament_slug}/{team_slug}/summary"
+        
+        build_id = self._get_build_id(match_url)
+        if not build_id:
+            return {"success": False, "error": "Could not get build ID from match page"}
         
         # Paths for different tabs
         paths = {
@@ -79,9 +83,10 @@ class CricHeroesScraper:
         }
 
     def scrape_all(self, tournament_id, slug):
-        build_id = self._get_build_id(tournament_id, slug)
+        tournament_url = f"{self.base_url}/tournament/{tournament_id}/{slug}/matches/past-matches"
+        build_id = self._get_build_id(tournament_url)
         if not build_id:
-            return {"success": False, "error": "Could not find Build ID"}
+            return {"success": False, "error": "Could not find Build ID for tournament"}
 
         base_params = {"tournamentId": tournament_id, "tournamentName": slug}
 
