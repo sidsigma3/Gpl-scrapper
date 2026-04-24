@@ -5,17 +5,18 @@ import time
 class CricHeroesScraper:
     def __init__(self):
         self.base_url = "https://cricheroes.com"
-        self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'application/json',
-            'Referer': 'https://cricheroes.com/',
-        }
+        self.session = requests.Session()
+        self.session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        })
 
     def _get_build_id(self, tournament_id, slug):
         """Fetch the main tournament page and extract the Next.js buildId."""
         url = f"{self.base_url}/tournament/{tournament_id}/{slug}/matches/past-matches"
         try:
-            response = requests.get(url, headers=self.headers, timeout=10)
+            response = self.session.get(url, timeout=10)
             match = re.search(r'"buildId":"([^"]+)"', response.text)
             return match.group(1) if match else None
         except Exception as e:
@@ -30,7 +31,7 @@ class CricHeroesScraper:
             url = f"{self.base_url}/_next/data/{build_id}/tournament/{tournament_id}/{slug}/{tab_path}.json"
             
         try:
-            response = requests.get(url, headers=self.headers, params=params, timeout=10)
+            response = self.session.get(url, params=params, timeout=10)
             if response.status_code != 200:
                 print(f"Failed to fetch {tab_path}: {response.status_code}")
                 return {}
