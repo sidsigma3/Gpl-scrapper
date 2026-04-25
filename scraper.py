@@ -1,6 +1,7 @@
 import requests
 import re
 import time
+from bs4 import BeautifulSoup
 
 class CricHeroesScraper:
     def __init__(self):
@@ -23,17 +24,43 @@ class CricHeroesScraper:
 
     def _get_build_id(self, url):
         """Fetch the page at the given URL and extract the Next.js buildId."""
-        for attempt in range(3):
-            try:
-                response = self.session.get(url, timeout=10)
-                if response.status_code == 200:
-                    match = re.search(r'"buildId":"([^"]+)"', response.text)
+        try:
+            # We use a fresh header set to avoid being flagged
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            }
+            response = self.session.get(url, headers=headers, timeout=15)
+            response.raise_for_status()
+            
+            # Robust patterns for finding the build ID in the HTML
+            patterns = [
+                r'"buildId":"(.*?)"',
+                r'\/_next\/data\/(.*?)\/',
+                r'buildId\\":\\"(.*?)\\"'
+            ]
+            
+            for pattern in patterns:
+                match = re.search(pattern, response.text)
+                if match:
+                    build_id = match.group(1)
+                    print(f"DEBUG: Found Build ID: {build_id}")
+                    return build_id
+            
+            # Final fallback: Parse script tags
+            soup = BeautifulSoup(response.text, 'html.parser')
+            scripts = soup.find_all('script')
+            for script in scripts:
+                if script.string and 'buildId' in script.string:
+                    match = re.search(r'"buildId":"(.*?)"', script.string)
                     if match:
                         return match.group(1)
-                time.sleep(1)
-            except Exception as e:
-                print(f"Attempt {attempt + 1} failed: {e}")
-        return None
+
+            print("DEBUG: Build ID not found in page source.")
+            return None
+        except Exception as e:
+            print(f"DEBUG: Build ID Error: {str(e)}")
+            return None
 
     def _fetch_tab(self, build_id, tournament_id, slug, tab_path, params, is_direct_path=False):
         """Fetch JSON data from the internal Next.js endpoint."""
@@ -45,16 +72,15 @@ class CricHeroesScraper:
         try:
             response = self.session.get(url, params=params, timeout=10)
             if response.status_code != 200:
-                print(f"Failed to fetch {tab_path}: {response.status_code}")
+                print(f"DEBUG: Failed to fetch {tab_path}: {response.status_code}")
                 return {}
             return response.json().get("pageProps", {})
         except Exception as e:
-            print(f"Error fetching tab {tab_path}: {e}")
+            print(f"DEBUG: Error fetching tab {tab_path}: {e}")
             return {}
 
     def slugify(self, text):
-        import re
-        text = text.lower()
+        text = str(text).lower()
         text = re.sub(r'[^a-z0-9 ]', '', text)
         return text.replace(' ', '-')
 
@@ -64,7 +90,11 @@ class CricHeroesScraper:
         
         build_id = self._get_build_id(match_url)
         if not build_id:
-            return {"success": False, "error": "Could not get build ID from match page"}
+            # Try a generic slug if the specific one fails
+            match_url = f"{self.base_url}/scorecard/{match_id}/match-details/summary"
+            build_id = self._get_build_id(match_url)
+            if not build_id:
+                return {"success": False, "error": "Could not get build ID from match page"}
         
         # Paths for different tabs
         paths = {
@@ -108,6 +138,7 @@ class CricHeroesScraper:
 
         points_table = self._fetch_tab(build_id, tournament_id, slug, 'points-table', 
                                       {**base_params, "tabName": "points-table"})
+        print(f"DEBUG: Points Table Raw Keys: {list(points_table.keys()) if points_table else 'EMPTY'}")
         
         leaderboard = self._fetch_tab(build_id, tournament_id, slug, 'leaderboard', 
                                      {**base_params, "tabName": "leaderboard"})
