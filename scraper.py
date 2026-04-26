@@ -24,43 +24,29 @@ class CricHeroesScraper:
 
     def _get_build_id(self, url):
         """Fetch the page at the given URL and extract the Next.js buildId."""
+        # Hardcoded Build ID provided by user to bypass Cloudflare discovery issues
+        provided_build_id = "VJCa1OqVcXtUf3QXmrsKn"
+        
         try:
-            # We use a fresh header set to avoid being flagged
+            # Try discovery first (as it might have changed or be different for other pages)
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
             }
-            response = self.session.get(url, headers=headers, timeout=15)
-            response.raise_for_status()
-            
-            # Robust patterns for finding the build ID in the HTML
-            patterns = [
-                r'"buildId":"(.*?)"',
-                r'\/_next\/data\/(.*?)\/',
-                r'buildId\\":\\"(.*?)\\"'
-            ]
-            
-            for pattern in patterns:
-                match = re.search(pattern, response.text)
-                if match:
-                    build_id = match.group(1)
-                    print(f"DEBUG: Found Build ID: {build_id}")
-                    return build_id
-            
-            # Final fallback: Parse script tags
-            soup = BeautifulSoup(response.text, 'html.parser')
-            scripts = soup.find_all('script')
-            for script in scripts:
-                if script.string and 'buildId' in script.string:
-                    match = re.search(r'"buildId":"(.*?)"', script.string)
+            response = self.session.get(url, headers=headers, timeout=5)
+            if response.status_code == 200:
+                patterns = [r'"buildId":"(.*?)"', r'\/_next\/data\/(.*?)\/']
+                for pattern in patterns:
+                    match = re.search(pattern, response.text)
                     if match:
                         return match.group(1)
-
-            print("DEBUG: Build ID not found in page source.")
-            return None
+            
+            # If discovery fails (e.g. Cloudflare block), use the provided one
+            print(f"DEBUG: Discovery failed/blocked. Using provided Build ID: {provided_build_id}")
+            return provided_build_id
         except Exception as e:
-            print(f"DEBUG: Build ID Error: {str(e)}")
-            return None
+            print(f"DEBUG: Build ID Discovery Error: {str(e)}. Falling back to {provided_build_id}")
+            return provided_build_id
 
     def _fetch_tab(self, build_id, tournament_id, slug, tab_path, params, is_direct_path=False):
         """Fetch JSON data from the internal Next.js endpoint."""
@@ -133,6 +119,12 @@ class CricHeroesScraper:
         past_matches = self._fetch_tab(build_id, tournament_id, slug, 'matches/past-matches', 
                                       {**base_params, "tabName": "matches", "innerTab": "past-matches"})
         
+        upcoming_matches = self._fetch_tab(build_id, tournament_id, slug, 'matches/upcoming-matches', 
+                                          {**base_params, "tabName": "matches", "innerTab": "upcoming-matches"})
+        
+        live_matches = self._fetch_tab(build_id, tournament_id, slug, 'matches/live-matches', 
+                                      {**base_params, "tabName": "matches", "innerTab": "live-matches"})
+        
         teams_data = self._fetch_tab(build_id, tournament_id, slug, 'teams', 
                                      {**base_params, "tabName": "teams"})
 
@@ -144,13 +136,36 @@ class CricHeroesScraper:
                                      {**base_params, "tabName": "leaderboard"})
 
         # Map data to consistent structure
-        match_data = past_matches.get("matchResponse", {}).get("data", [])
-        if not match_data:
-            match_data = past_matches.get("past_matches", [])
+        all_matches = []
+        
+        # Helper to extract matches from response
+        def extract_matches(data_resp):
+            resp = data_resp.get("matchResponse", {}).get("data", [])
+            if not resp:
+                resp = data_resp.get("past_matches", [])
+            if not resp:
+                resp = data_resp.get("upcoming_matches", [])
+            if not resp:
+                resp = data_resp.get("live_matches", [])
+            return resp
+
+        all_matches.extend(extract_matches(past_matches))
+        all_matches.extend(extract_matches(upcoming_matches))
+        all_matches.extend(extract_matches(live_matches))
+        
+        match_data = all_matches
             
         team_data = teams_data.get("teamResponse", {}).get("data", [])
         if not team_data:
-            team_data = past_matches.get("tournamentDetails", {}).get("teams", [])
+            # Fallback for different JSON structures
+            team_data = teams_data.get("tournamentDetails", {}).get("teams", [])
+        
+        # Check if players are nested in team_data
+        for team in team_data:
+            if "players" not in team or not team["players"]:
+                # If not present, we could fetch them, but user says they are in teams.json
+                # We'll just log if they are missing
+                pass
 
         standing_data = points_table.get("teamStandings", {})
         if isinstance(standing_data, dict):
