@@ -128,6 +128,9 @@ class CricHeroesScraper:
         teams_data = self._fetch_tab(build_id, tournament_id, slug, 'teams', 
                                      {**base_params, "tabName": "teams"})
 
+        squads_data = self._fetch_tab(build_id, tournament_id, slug, 'squads', 
+                                     {**base_params, "tabName": "squads"})
+
         points_table = self._fetch_tab(build_id, tournament_id, slug, 'points-table', 
                                       {**base_params, "tabName": "points-table"})
         print(f"DEBUG: Points Table Raw Keys: {list(points_table.keys()) if points_table else 'EMPTY'}")
@@ -157,14 +160,23 @@ class CricHeroesScraper:
             
         team_data = teams_data.get("teamResponse", {}).get("data", [])
         if not team_data:
-            # Fallback for different JSON structures
             team_data = teams_data.get("tournamentDetails", {}).get("teams", [])
+        
+        # Merge squads info
+        squad_teams = squads_data.get("squads", {}).get("data", [])
+        if not squad_teams:
+            squad_teams = squads_data.get("tournamentDetails", {}).get("squads", [])
+
+        if squad_teams:
+            squad_map = {str(st.get("team_id")): st.get("players", []) for st in squad_teams}
+            for team in team_data:
+                tid = str(team.get("team_id") or team.get("id"))
+                if tid in squad_map and squad_map[tid]:
+                    team["players"] = squad_map[tid]
         
         # Check if players are nested in team_data
         for team in team_data:
             if "players" not in team or not team["players"]:
-                # If not present, we could fetch them, but user says they are in teams.json
-                # We'll just log if they are missing
                 pass
 
         standing_data = points_table.get("teamStandings", {})
