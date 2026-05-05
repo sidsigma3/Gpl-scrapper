@@ -114,7 +114,8 @@ class CricHeroesScraper:
             "summary": f"scorecard/{match_id}/{tournament_slug}/{team_slug}/summary",
             "scorecard": f"scorecard/{match_id}/{tournament_slug}/{team_slug}/scorecard",
             "full-scorecard": f"scorecard/{match_id}/{tournament_slug}/{team_slug}/full-scorecard",
-            "squads": f"scorecard/{match_id}/{tournament_slug}/{team_slug}/squads"
+            "squads": f"scorecard/{match_id}/{tournament_slug}/{team_slug}/squads",
+            "commentary": f"scorecard/{match_id}/{tournament_slug}/{team_slug}/commentary",
         }
 
         params = {
