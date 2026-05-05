@@ -127,6 +127,24 @@ class CricHeroesScraper:
         for tab, path in paths.items():
             results[tab] = self._fetch_tab(build_id, None, None, path, {**params, "tab": tab}, is_direct_path=True)
 
+        # Live matches: CricHeroes 307-redirects /summary to /live, so the summary
+        # tab response is just a redirect marker. Fetch /live and reshape its
+        # miniScorecard.data into the same shape as past-match summaryData.data.
+        summary_resp = results.get("summary") or {}
+        if summary_resp.get("__N_REDIRECT"):
+            live_path = f"scorecard/{match_id}/{tournament_slug}/{team_slug}/live"
+            live_resp = self._fetch_tab(build_id, None, None, live_path, {**params, "tab": "live"}, is_direct_path=True)
+            mini = (live_resp.get("miniScorecard") or {}).get("data")
+            if not mini:
+                # fallback: scorecard tab also carries miniScorecard for live matches
+                mini = ((results.get("scorecard") or {}).get("miniScorecard") or {}).get("data")
+            if mini:
+                results["summary"] = {
+                    "summaryData": {"status": True, "data": mini},
+                    "scorecard": [],
+                    "tab": "summary",
+                }
+
         return {
             "success": True,
             "match_id": match_id,
