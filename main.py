@@ -33,6 +33,18 @@ def scrape_full(tournament_id: str, slug: str = "govindaplly-premier-leauge-2"):
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/scrape/live/{tournament_id}", dependencies=[Depends(verify_secret)])
+def scrape_live(tournament_id: str, slug: str = "govindaplly-premier-leauge-2"):
+    try:
+        result = scraper.scrape_live_matches(tournament_id, slug)
+        if not result.get("success"):
+            raise HTTPException(status_code=500, detail=result.get("error", "Scraping failed"))
+        return result
+    except Exception as e:
+        print(f"SCRAPE_LIVE ERROR: {str(e)}")
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/scrape/match/{match_id}", dependencies=[Depends(verify_secret)])
 def scrape_match(match_id: str, slug: str, team_a: str, team_b: str):
     try:

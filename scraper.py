@@ -1,3 +1,4 @@
+import os
 import requests
 import re
 import time
@@ -8,55 +9,81 @@ class CricHeroesScraper:
         import random
         self.base_url = "https://cricheroes.com"
         self.session = requests.Session()
-        
+
         user_agents = [
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Mozilla/5.0 (iPhone; CPU iPhone OS 17_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1"
         ]
-        
+
         self.session.headers.update({
             "User-Agent": random.choice(user_agents),
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
         })
 
-    def _get_build_id(self, url):
-        """Fetch the page at the given URL and extract the Next.js buildId."""
-        # Hardcoded Build ID provided by user to bypass Cloudflare discovery issues
-        provided_build_id = "VJCa1OqVcXtUf3QXmrsKn"
-        
-        try:
-            # Try discovery first (as it might have changed or be different for other pages)
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-            }
-            response = self.session.get(url, headers=headers, timeout=5)
-            if response.status_code == 200:
-                patterns = [r'"buildId":"(.*?)"', r'\/_next\/data\/(.*?)\/']
-                for pattern in patterns:
-                    match = re.search(pattern, response.text)
-                    if match:
-                        return match.group(1)
-            
-            # If discovery fails (e.g. Cloudflare block), use the provided one
-            print(f"DEBUG: Discovery failed/blocked. Using provided Build ID: {provided_build_id}")
-            return provided_build_id
-        except Exception as e:
-            print(f"DEBUG: Build ID Discovery Error: {str(e)}. Falling back to {provided_build_id}")
-            return provided_build_id
+        self._fallback_build_id = os.getenv("CRICHEROES_BUILD_ID", "8iMSuY1ejzbaFdLLYf6fm")
+        self._cached_build_id = None
 
-    def _fetch_tab(self, build_id, tournament_id, slug, tab_path, params, is_direct_path=False):
-        """Fetch JSON data from the internal Next.js endpoint."""
+    def _discover_build_id(self, url=None):
+        """Try to extract the Next.js buildId from a CricHeroes page."""
+        urls_to_try = []
+        if url:
+            urls_to_try.append(url)
+        urls_to_try.extend([
+            f"{self.base_url}/",
+            f"{self.base_url}/tournament",
+        ])
+        patterns = [r'"buildId":"(.*?)"', r'/_next/data/([^/"]+)/']
+        for try_url in urls_to_try:
+            try:
+                response = self.session.get(try_url, timeout=6)
+                if response.status_code == 200:
+                    for pattern in patterns:
+                        match = re.search(pattern, response.text)
+                        if match:
+                            return match.group(1)
+            except Exception as e:
+                print(f"DEBUG: Build ID discovery error for {try_url}: {e}")
+        return None
+
+    def _get_build_id(self, url=None, force_refresh=False):
+        """Return a usable Next.js buildId. Caches in memory; refreshes on demand."""
+        if not force_refresh and self._cached_build_id:
+            return self._cached_build_id
+
+        fresh = self._discover_build_id(url)
+        if fresh:
+            if fresh != self._cached_build_id:
+                print(f"DEBUG: Build ID set to {fresh} (was {self._cached_build_id or self._fallback_build_id})")
+            self._cached_build_id = fresh
+            return fresh
+
+        if not self._cached_build_id:
+            print(f"DEBUG: Discovery failed; using env fallback {self._fallback_build_id}")
+            self._cached_build_id = self._fallback_build_id
+        return self._cached_build_id
+
+    def invalidate_build_id(self):
+        self._cached_build_id = None
+
+    def _fetch_tab(self, build_id, tournament_id, slug, tab_path, params, is_direct_path=False, _retried=False):
+        """Fetch JSON data from the internal Next.js endpoint. Auto-refreshes build id on 404."""
         if is_direct_path:
             url = f"{self.base_url}/_next/data/{build_id}/{tab_path}.json"
         else:
             url = f"{self.base_url}/_next/data/{build_id}/tournament/{tournament_id}/{slug}/{tab_path}.json"
-            
+
         try:
             response = self.session.get(url, params=params, timeout=10)
+            if response.status_code == 404 and not _retried:
+                # build id likely rotated — invalidate and retry once
+                print(f"DEBUG: 404 on {tab_path}; refreshing build id and retrying")
+                self.invalidate_build_id()
+                new_build_id = self._get_build_id(force_refresh=True)
+                if new_build_id and new_build_id != build_id:
+                    return self._fetch_tab(new_build_id, tournament_id, slug, tab_path, params, is_direct_path, _retried=True)
             if response.status_code != 200:
                 print(f"DEBUG: Failed to fetch {tab_path}: {response.status_code}")
                 return {}
@@ -107,6 +134,31 @@ class CricHeroesScraper:
             "scraped_at": time.strftime("%Y-%m-%dT%H:%M:%SZ")
         }
 
+    def scrape_live_matches(self, tournament_id, slug):
+        """Lightweight: only fetch the live-matches tab. Used by the fast cron."""
+        tournament_url = f"{self.base_url}/tournament/{tournament_id}/{slug}/matches/live-matches"
+        build_id = self._get_build_id(tournament_url)
+        if not build_id:
+            return {"success": False, "error": "Could not find Build ID for tournament"}
+
+        base_params = {"tournamentId": tournament_id, "tournamentName": slug}
+        live_matches = self._fetch_tab(
+            build_id, tournament_id, slug, 'matches/live-matches',
+            {**base_params, "tabName": "matches", "innerTab": "live-matches"}
+        )
+
+        matches = (
+            live_matches.get("matchResponse", {}).get("data", [])
+            or live_matches.get("live_matches", [])
+            or []
+        )
+
+        return {
+            "success": True,
+            "matches": matches,
+            "scraped_at": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+
     def scrape_all(self, tournament_id, slug):
         tournament_url = f"{self.base_url}/tournament/{tournament_id}/{slug}/matches/past-matches"
         build_id = self._get_build_id(tournament_url)
@@ -130,6 +182,12 @@ class CricHeroesScraper:
 
         squads_data = self._fetch_tab(build_id, tournament_id, slug, 'squads', 
                                      {**base_params, "tabName": "squads"})
+        
+        print(f"DEBUG: Squads Raw Keys: {list(squads_data.keys()) if squads_data else 'EMPTY'}")
+        if squads_data and "squads" in squads_data:
+             print(f"DEBUG: Squads Data Type: {type(squads_data['squads'])}")
+             if isinstance(squads_data['squads'], dict):
+                 print(f"DEBUG: Squads Dict Keys: {list(squads_data['squads'].keys())}")
 
         points_table = self._fetch_tab(build_id, tournament_id, slug, 'points-table', 
                                       {**base_params, "tabName": "points-table"})
